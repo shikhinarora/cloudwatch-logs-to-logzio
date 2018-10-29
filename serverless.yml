@@ -16,9 +16,9 @@ functions:
     handler: functions/ship-logs/handler.handler
     description: Sends CloudWatch logs to Logz.io
     memorySize: 128
-    environment:
-      logstash_host: <INSERT VALUE HERE>
-      logstash_port: <INSERT VALUE HERE>
+    environment: listener.logz.io
+      logstash_host: 
+      logstash_port: 5050
       token: <INSERT VALUE HERE>
 
   set-retention:
