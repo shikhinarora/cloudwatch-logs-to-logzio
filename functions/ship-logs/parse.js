@@ -1,5 +1,12 @@
 'use strict';
 
+const pricePerGbSecond = 0.00001667
+
+let calCostForInvocation = function (memorySize, billedDuration) {
+  let raw = pricePerGbSecond * (memorySize / 1024) * (billedDuration / 1000);
+  return parseFloat(raw.toFixed(9));
+}
+
 // logGroup looks like this:
 //    "logGroup": "/aws/lambda/service-env-funcName"
 let parseFunctionName = function (logGroup) {
@@ -25,6 +32,22 @@ let tryParseJson = function (str) {
 // NOTE: this won't work for some units like Bits/Second, Count/Second, etc.
 let toCamelCase = function(str) {
   return str.substr( 0, 1 ).toUpperCase() + str.substr( 1 );
+}
+
+let makeMetric = (value, unit, name, dimensions, namespace, timestamp) => {
+  return {
+    Value      : value,
+    Unit       : toCamelCase(unit),
+    MetricName : name,
+    Dimensions : dimensions,
+    Namespace  : namespace,
+    Timestamp  : timestamp ? new Date(timestamp) : new Date()
+  };
+}
+
+let parseFloatWith = (regex, input) => {
+  let res = regex.exec(input);
+  return parseFloat(res[1]);
 }
 
 // a Lambda function log message looks like this:
@@ -123,14 +146,36 @@ let parseCustomMetric = function (functionName, version, logEvent) {
     dimensions = dimensions.concat(customDimensions);
   }
 
-  return {
-    Value      : metricValue,
-    Unit       : metricUnit,
-    MetricName : metricName,
-    Dimensions : dimensions,
-    Timestamp  : new Date(timestamp),
-    Namespace  : namespace
-  };
+  return makeMetric(metricValue, metricUnit, metricName, dimensions, namespace, timestamp);
+}
+
+// a typical report message looks like this:
+//    "REPORT RequestId: 3897a7c2-8ac6-11e7-8e57-bb793172ae75\tDuration: 2.89 ms\tBilled Duration: 100 ms \tMemory Size: 1024 MB\tMax Memory Used: 20 MB\t\n"
+let parseUsageMetrics = function (functionName, version, logEvent) {
+  if (logEvent.message.startsWith("REPORT RequestId:")) {
+    let parts = logEvent.message.split("\t", 5);
+
+    let billedDuration = parseFloatWith(/Billed Duration: (.*) ms/i, parts[2]);
+    let memorySize     = parseFloatWith(/Memory Size: (.*) MB/i, parts[3]);
+    let memoryUsed     = parseFloatWith(/Max Memory Used: (.*) MB/i, parts[4]);
+    let cost           = calCostForInvocation(memorySize, billedDuration);
+
+    let dimensions = [
+      { Name: "Function", Value: functionName },
+      { Name: "Version", Value: version }
+    ];
+
+    let namespace = 'AWS/Lambda';
+
+    return [
+      makeMetric(billedDuration, "milliseconds", "BilledDuration", dimensions, namespace),
+      makeMetric(memorySize, "megabytes", "MemorySize", dimensions, namespace),
+      makeMetric(memoryUsed, "megabytes", "MemoryUsed", dimensions, namespace),
+      makeMetric(cost, "milliseconds", "CostInDollars", dimensions, namespace),
+    ];
+  }
+
+  return [];
 }
 
 let parseAll = function (logGroup, logStream, logEvents) {
@@ -145,7 +190,11 @@ let parseAll = function (logGroup, logStream, logEvents) {
     .map(e => parseCustomMetric(functionName, lambdaVersion, e))
     .filter(metric => metric != null && metric != undefined);
 
-  return { logs, customMetrics };
+  let usageMetrics = logEvents
+    .map(e => parseUsageMetrics(functionName, lambdaVersion, e))
+    .reduce((acc, metrics) => acc.concat(metrics), []);
+
+  return { logs, customMetrics, usageMetrics };
 }
 
 module.exports = {
