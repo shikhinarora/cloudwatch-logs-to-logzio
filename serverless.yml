@@ -16,10 +16,15 @@ functions:
     handler: functions/ship-logs/handler.handler
     description: Sends CloudWatch logs to Logz.io
     memorySize: 128
-    environment: listener.logz.io
-      logstash_host: 
+    environment:
+      logstash_host: listener.logz.io
       logstash_port: 5050
-      token: <INSERT VALUE HERE>
+      token: <logz.io-token>
+    iamRoleStatementsName: ship-logs-role
+    iamRoleStatements:
+      - Effect: "Allow"
+        Action: "cloudwatch:PutMetricData"
+        Resource: "*"
 
   set-retention:
     handler: functions/set-retention/handler.handler
